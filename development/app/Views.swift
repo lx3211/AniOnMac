@@ -315,11 +315,22 @@ struct ContentView: View {
         if let url { studio.importFile(url) }
     }
     var footer: some View {
-        HStack(spacing: 14) {
-            Text(studio.t(studio.status)).modifier(SecondaryCopy()).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
-            Button(studio.t("undo")) { studio.restore() }.buttonStyle(SmallActionStyle()).disabled(!studio.canUndo).controlSize(.large)
-            Button { studio.apply() } label: { Label(studio.t(studio.isApplied ? "alreadyApplied" : "apply"), systemImage: "checkmark").padding(.horizontal, 8) }
-                .buttonStyle(SmallActionStyle(primary: true)).controlSize(.large).disabled(!studio.canApply)
+        VStack(alignment: .trailing, spacing: 8) {
+            HStack(spacing: 14) {
+                Text(studio.t(studio.status)).modifier(SecondaryCopy()).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+                Button(studio.t("undo")) { studio.restore() }.buttonStyle(SmallActionStyle()).disabled(!studio.canUndo).controlSize(.large)
+                Button { studio.apply() } label: { Label(studio.t(studio.isApplied ? "alreadyApplied" : "apply"), systemImage: "checkmark").padding(.horizontal, 8) }
+                    .buttonStyle(SmallActionStyle(primary: true)).controlSize(.large).disabled(!studio.canApply)
+            }
+            if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+                Text(verbatim: "v\(version)")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Color(red: 0.51, green: 0.29, blue: 0.12))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(apricot.opacity(0.55), in: Capsule())
+                    .offset(y: 6)
+            }
         }
     }
 }
