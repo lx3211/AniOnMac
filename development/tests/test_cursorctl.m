@@ -2,6 +2,39 @@
 #include "../native/cursorctl.m"
 #include <assert.h>
 
+static void testNativeWaitBackup(NSString *path, NSDictionary *stockWait) {
+    NSBitmapImageRep *sheet = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+        pixelsWide:2 pixelsHigh:nativeWaitFrames bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES
+        isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+    for (NSInteger frame = 0; frame < nativeWaitFrames; frame++) {
+        NSUInteger pixel[] = {(NSUInteger)frame * 8, 0, 0, 255};
+        [sheet setPixel:pixel atX:0 y:frame];
+        [sheet setPixel:pixel atX:1 y:frame];
+    }
+    NSMutableDictionary *rawWait = [stockWait mutableCopy];
+    rawWait[@"FrameCount"] = @(nativeWaitFrames);
+    rawWait[@"FrameDuration"] = @(1.0 / 60);
+    rawWait[@"Representations"] = @[[sheet representationUsingType:NSBitmapImageFileTypePNG properties:@{}]];
+    assert(saveBackup(@{waitCursor: rawWait}, path, YES, NULL));
+
+    NSDictionary *backup = readCape(path, YES);
+    assert([backup[waitCursor] isEqual:rawWait]);
+    NSDictionary *restored = restorableCursors(backup)[waitCursor];
+    assert([restored[@"FrameCount"] unsignedIntegerValue] == compatibleWaitFrames);
+    assert(fabs([restored[@"FrameDuration"] doubleValue] * compatibleWaitFrames - 0.5) < 0.000001);
+    for (NSString *field in @[@"PointsWide", @"PointsHigh", @"HotSpotX", @"HotSpotY"])
+        assert([restored[field] isEqual:rawWait[field]]);
+    NSBitmapImageRep *output = [NSBitmapImageRep imageRepWithData:restored[@"Representations"][0]];
+    assert(output.pixelsHigh == compatibleWaitFrames && output.pixelsWide == 2);
+    for (NSInteger frame = 0; frame < compatibleWaitFrames; frame++) {
+        NSUInteger pixel[4];
+        [output getPixel:pixel atX:0 y:frame];
+        assert(pixel[0] == (NSUInteger)frame * 16);
+    }
+    assert([readCape(path, YES)[waitCursor] isEqual:rawWait]);
+    assert(restorableCursors(@{waitCursor: stockWait})[waitCursor] == stockWait);
+}
+
 int main(void) {
     @autoreleasepool {
         NSDictionary *original = nativeDefaults();
@@ -37,19 +70,20 @@ int main(void) {
         NSData *data = [NSPropertyListSerialization dataWithPropertyList:@{@"Cursors": modern}
             format:NSPropertyListXMLFormat_v1_0 options:0 error:NULL];
         assert([data writeToFile:path atomically:YES]);
-        assert([readCape(path) isEqual:modern]);
+        assert([readCape(path, NO) isEqual:modern]);
         [NSFileManager.defaultManager removeItemAtPath:path error:NULL];
         NSString *backup = [NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
         NSError *error = nil;
         assert(saveBackup(legacy, backup, NO, &error));
         assert(!saveBackup(modern, backup, NO, &error));
-        assert([readCape(backup) isEqual:legacy]);
+        assert([readCape(backup, YES) isEqual:legacy]);
         assert(saveBackup(modern, backup, YES, &error));
-        assert([readCape(backup) isEqual:modern]);
+        assert([readCape(backup, YES) isEqual:modern]);
         assert(saveBackup(@{@"com.apple.coregraphics.Wait": wait}, backup, YES, &error));
-        assert(readCape(backup).count == 1);
+        assert(readCape(backup, YES).count == 1);
+        testNativeWaitBackup(backup, wait);
         [NSFileManager.defaultManager removeItemAtPath:backup error:NULL];
-        puts("PASS: legacy/new aliases, explicit alias priority, backup round-trip, readback mismatch detection. No system cursor calls.");
+        puts("PASS: aliases, backup round-trip, 30-frame native Wait recovery, and readback mismatch detection. No system cursor calls.");
     }
     return 0;
 }

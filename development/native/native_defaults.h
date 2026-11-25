@@ -24,8 +24,8 @@ static NSDictionary *nativeDefaults(void) {
         fail(@"Unsupported CursorAsset table layout. No cursors changed.");
     NSUInteger entries = (section + bytes - (const uint8_t *)table) / sizeof(MeowAssetEntry);
     BOOL modern = NSProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26;
-    NSDictionary *wanted = modern ? @{@100: @"com.apple.coregraphics.ArrowS", @101: @"com.apple.coregraphics.IBeamS", @7: @"com.apple.coregraphics.Wait"}
-                                  : @{@0: @"com.apple.coregraphics.Arrow", @1: @"com.apple.coregraphics.IBeam", @7: @"com.apple.coregraphics.Wait"};
+    NSDictionary *wanted = modern ? @{@100: @"com.apple.coregraphics.ArrowS", @101: @"com.apple.coregraphics.IBeamS", @7: waitCursor}
+                                  : @{@0: @"com.apple.coregraphics.Arrow", @1: @"com.apple.coregraphics.IBeam", @7: waitCursor};
     NSMutableDictionary *cursors = [NSMutableDictionary dictionary];
     for (NSUInteger i = 0; i < entries && table[i].record; i++) {
         NSString *key = wanted[@(table[i].identifier)];
@@ -34,11 +34,8 @@ static NSDictionary *nativeDefaults(void) {
         if (r->frames < 1 || r->frames > 128 || r->representationCount < 1 || r->representationCount > 8 ||
             !isfinite(r->width) || !isfinite(r->height) || r->width <= 0 || r->width > 512 || r->height <= 0 || r->height > 512)
             fail(@"Unsupported native cursor record. No cursors changed.");
-        // The private registration API rejects >24 frames on macOS 26.6.2.
-        // Preserve the original cycle duration with uniform 2:1 sampling of
-        // Apple's 30-frame Wait artwork; do not substitute a theme backup.
-        NSUInteger stride = table[i].identifier == 7 && r->frames == 30 ? 2 : 1;
-        NSUInteger outputFrames = r->frames / stride;
+        BOOL sampleWait = [key isEqualToString:waitCursor] && r->frames == nativeWaitFrames;
+        NSUInteger outputFrames = sampleWait ? compatibleWaitFrames : r->frames;
         NSMutableArray *representations = [NSMutableArray array];
         for (NSUInteger j = 0; j < r->representationCount; j++) {
             const MeowAssetPixels *p = r->representations[j];
@@ -48,17 +45,10 @@ static NSDictionary *nativeDefaults(void) {
             CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, p->pixels, p->width * p->height * r->frames * 4, NULL);
             CGImageRef image = CGImageCreate(p->width, p->height * r->frames, 8, 32, p->width * 4, color,
                 kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst, provider, NULL, false, kCGRenderingIntentDefault);
-            if (image && stride > 1) {
-                CGContextRef context = CGBitmapContextCreate(NULL, p->width, p->height * outputFrames, 8, p->width * 4, color, kCGImageAlphaPremultipliedLast);
-                if (!context) fail(@"Cannot prepare native Wait compatibility frames");
-                for (NSUInteger step = 0; step < outputFrames; step++) {
-                    CGImageRef frame = CGImageCreateWithImageInRect(image, CGRectMake(0, step * stride * p->height, p->width, p->height));
-                    CGContextDrawImage(context, CGRectMake(0, (outputFrames - 1 - step) * p->height, p->width, p->height), frame);
-                    CGImageRelease(frame);
-                }
+            if (image && sampleWait) {
+                CGImageRef sampled = sampleNativeWait(image);
                 CGImageRelease(image);
-                image = CGBitmapContextCreateImage(context);
-                CGContextRelease(context);
+                image = sampled;
             }
             NSData *png = image ? [[[NSBitmapImageRep alloc] initWithCGImage:image] representationUsingType:NSBitmapImageFileTypePNG properties:@{}] : nil;
             if (image) CGImageRelease(image);
@@ -67,7 +57,8 @@ static NSDictionary *nativeDefaults(void) {
             [representations addObject:png];
         }
         cursors[key] = @{@"PointsWide": @(r->width), @"PointsHigh": @(r->height), @"HotSpotX": @(r->hotX), @"HotSpotY": @(r->hotY),
-                         @"FrameCount": @(outputFrames), @"FrameDuration": @(r->duration * stride), @"NativeSourceFrames": @(r->frames), @"Representations": representations};
+                         @"FrameCount": @(outputFrames), @"FrameDuration": @(r->duration * (double)r->frames / outputFrames),
+                         @"NativeSourceFrames": @(r->frames), @"Representations": representations};
     }
     if (cursors.count != 3) fail(@"Native arrow, text or wait asset not found. No cursors changed.");
     // The pointing-hand artwork and hotspot come from HIServices, not a theme dump.

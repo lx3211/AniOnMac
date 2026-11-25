@@ -13,6 +13,9 @@ static RegisterFn registerCursor;
 static CopyFn copyCursor;
 static CoreCopyFn coreCopy;
 
+static NSString *const waitCursor = @"com.apple.coregraphics.Wait";
+enum { maximumRegisteredFrames = 24, nativeWaitFrames = 30, compatibleWaitFrames = 15 };
+
 static void fail(NSString *message) {
     fprintf(stderr, "%s\n", message.UTF8String);
     exit(1);
@@ -20,7 +23,7 @@ static void fail(NSString *message) {
 
 static NSArray *identifiers(void) {
     return @[@"com.apple.coregraphics.Arrow", @"com.apple.cursor.13",
-             @"com.apple.coregraphics.IBeam", @"com.apple.coregraphics.Wait"];
+             @"com.apple.coregraphics.IBeam", waitCursor];
 }
 
 static NSDictionary *aliases(void) {
@@ -51,7 +54,7 @@ static void loadAPI(void) {
         fail(@"Required private cursor API is unavailable. No cursors changed.");
 }
 
-static NSDictionary *readCape(NSString *path) {
+static NSDictionary *readCape(NSString *path, BOOL isBackup) {
     NSData *data = [NSData dataWithContentsOfFile:path];
     if (!data) fail(@"Cannot read cape file.");
     id value = [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:NULL error:NULL];
@@ -71,7 +74,8 @@ static NSDictionary *readCape(NSString *path) {
         double w = [c[@"PointsWide"] doubleValue], h = [c[@"PointsHigh"] doubleValue];
         double x = [c[@"HotSpotX"] doubleValue], y = [c[@"HotSpotY"] doubleValue];
         double n = [c[@"FrameCount"] doubleValue], duration = [c[@"FrameDuration"] doubleValue];
-        if (n < 1 || n > 24 || floor(n) != n || w <= 0 || h <= 0 || w > 512 || h > 512 || x < 0 || y < 0 || x >= w || y >= h || duration < 0 || (n > 1 && duration <= 0))
+        BOOL nativeWaitBackup = isBackup && [key isEqualToString:waitCursor] && n == nativeWaitFrames;
+        if (n < 1 || (n > maximumRegisteredFrames && !nativeWaitBackup) || floor(n) != n || w <= 0 || h <= 0 || w > 512 || h > 512 || x < 0 || y < 0 || x >= w || y >= h || duration < 0 || (n > 1 && duration <= 0))
             fail(@"Cursor dimensions, timing or hotspot out of bounds.");
         id reps = c[@"Representations"];
         if (![reps isKindOfClass:NSArray.class] || [reps count] == 0) fail(@"Missing image representations.");
@@ -83,6 +87,54 @@ static NSDictionary *readCape(NSString *path) {
         }
     }
     return cursors;
+}
+
+// Keep every other frame of the native Wait animation. The result is retained.
+static CGImageRef sampleNativeWait(CGImageRef sheet) CF_RETURNS_RETAINED {
+    size_t width = CGImageGetWidth(sheet), sheetHeight = CGImageGetHeight(sheet);
+    if (!width || !sheetHeight || sheetHeight % nativeWaitFrames) return NULL;
+    size_t height = sheetHeight / nativeWaitFrames;
+    CGColorSpaceRef color = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    if (!color) return NULL;
+    CGContextRef context = CGBitmapContextCreate(NULL, width, height * compatibleWaitFrames, 8, 0, color, kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(color);
+    if (!context) return NULL;
+    for (NSUInteger step = 0; step < compatibleWaitFrames; step++) {
+        CGImageRef frame = CGImageCreateWithImageInRect(sheet, CGRectMake(0, step * 2 * height, width, height));
+        if (!frame) {
+            CGContextRelease(context);
+            return NULL;
+        }
+        CGContextDrawImage(context, CGRectMake(0, (compatibleWaitFrames - 1 - step) * height, width, height), frame);
+        CGImageRelease(frame);
+    }
+    CGImageRef sampled = CGBitmapContextCreateImage(context);
+    CGContextRelease(context);
+    return sampled;
+}
+
+static NSDictionary *restorableCursors(NSDictionary *backup) {
+    NSDictionary *wait = backup[waitCursor];
+    if ([wait[@"FrameCount"] unsignedIntegerValue] != nativeWaitFrames) return backup;
+
+    NSMutableArray *images = [NSMutableArray array];
+    for (NSData *data in wait[@"Representations"]) {
+        NSBitmapImageRep *source = [NSBitmapImageRep imageRepWithData:data];
+        CGImageRef sampled = source.CGImage ? sampleNativeWait(source.CGImage) : NULL;
+        if (!sampled) fail(@"Cannot prepare native Wait backup for restore. No cursors changed.");
+        NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:sampled];
+        CGImageRelease(sampled);
+        NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        if (!png) fail(@"Cannot encode native Wait backup for restore. No cursors changed.");
+        [images addObject:png];
+    }
+    NSMutableDictionary *compatible = [wait mutableCopy];
+    compatible[@"FrameCount"] = @(compatibleWaitFrames);
+    compatible[@"FrameDuration"] = @([wait[@"FrameDuration"] doubleValue] * 2);
+    compatible[@"Representations"] = images;
+    NSMutableDictionary *result = [backup mutableCopy];
+    result[waitCursor] = compatible;
+    return result;
 }
 
 static BOOL applyOne(NSString *key, NSDictionary *c) {
@@ -177,7 +229,7 @@ int main(int argc, const char *argv[]) {
             NSData *plist = [NSPropertyListSerialization dataWithPropertyList:data format:NSPropertyListXMLFormat_v1_0 options:0 error:NULL];
             NSError *error = nil;
             if (![plist writeToFile:@(argv[2]) options:NSDataWritingWithoutOverwriting error:&error]) fail(error.localizedDescription);
-            (void)readCape(@(argv[2]));
+            (void)readCape(@(argv[2]), NO);
             puts("Exported native cursors from local Apple resources. No system registrations changed.");
             return 0;
         }
@@ -204,17 +256,17 @@ int main(int argc, const char *argv[]) {
             return 0;
         }
         if ([command isEqualToString:@"validate"] && argc == 3) {
-            (void)readCape(@(argv[2]));
+            (void)readCape(@(argv[2]), NO);
             puts("Cursor data decoded by native AppKit. No cursors changed.");
             return 0;
         }
         if ([command isEqualToString:@"plan"] && argc == 3) {
-            NSDictionary *target = effectiveCursors(readCape(@(argv[2])), modern);
+            NSDictionary *target = effectiveCursors(readCape(@(argv[2]), NO), modern);
             for (NSString *key in [target.allKeys sortedArrayUsingSelector:@selector(compare:)]) puts(key.UTF8String);
             return 0;
         }
         if ([command isEqualToString:@"verify"] && argc == 3) {
-            NSDictionary *target = effectiveCursors(readCape(@(argv[2])), modern);
+            NSDictionary *target = effectiveCursors(readCape(@(argv[2]), NO), modern);
             loadAPI();
             BOOL ok = verify(target);
             puts("Readback checks metadata only. Visible appearance and animation still require observation.");
@@ -224,30 +276,36 @@ int main(int argc, const char *argv[]) {
         BOOL applying = ([command isEqualToString:@"apply"] && argc == 4) || replacing;
         BOOL restoring = [command isEqualToString:@"restore"] && argc == 3;
         if (!applying && !restoring) fail(@"Invalid arguments. Use doctor, validate FILE, plan FILE, inspect, verify FILE, apply FILE BACKUP, or restore BACKUP.");
-        NSDictionary *input = readCape(@(argv[2]));
+        NSDictionary *input = readCape(@(argv[2]), restoring);
         NSDictionary *target = effectiveCursors(input, modern);
+        if (restoring) target = restorableCursors(target);
         if (restoring && modern && (input[@"com.apple.coregraphics.Arrow"] || input[@"com.apple.coregraphics.IBeam"]))
             puts("Legacy backup: routing stored Arrow/IBeam images to ArrowS/IBeamS on macOS 26+. This restores stored images, not an unrecorded historical alias state.");
         loadAPI();
         NSArray *keys = [target.allKeys sortedArrayUsingSelector:@selector(compare:)];
         NSDictionary *before = snapshot(keys);
         if (!before) fail(@"Cannot back up all target cursors. No cursors changed.");
+        NSDictionary *rollback = restorableCursors(before);
         if (applying) {
             NSString *path = @(argv[3]);
             NSError *error = nil;
             if (!saveBackup(before, path, replacing, &error)) fail([NSString stringWithFormat:@"Cannot save backup: %@", error]);
-            (void)readCape(path);
+            (void)readCape(path, YES);
             printf("Backup saved: %s\n", path.UTF8String);
         }
         BOOL success = YES;
+        NSMutableDictionary *attempted = [NSMutableDictionary dictionary];
         for (NSString *key in keys) {
+            attempted[key] = rollback[key];
             if (!applyOne(key, target[key])) { success = NO; break; }
         }
         if (success) success = verify(target);
         if (!success) {
             BOOL ok = YES;
-            for (NSString *key in keys) if (!applyOne(key, before[key])) ok = NO;
-            if (ok) ok = verify(before);
+            for (NSString *key in keys) {
+                if (attempted[key] && !applyOne(key, attempted[key])) ok = NO;
+            }
+            if (ok) ok = verify(attempted);
             fail(ok ? @"Apply/readback failed; prior metadata restored. Verify appearance." : @"Apply or rollback verification failed. Use saved backup to restore.");
         }
         puts("Selected cursor registrations and metadata readbacks succeeded. Verify visible appearance, animation and click alignment in your apps.");
