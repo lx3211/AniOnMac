@@ -21,7 +21,7 @@ python3 - <<'PY'
 import plistlib
 from pathlib import Path
 p=Path('AniOnMac.app/Contents/Info.plist')
-p.write_bytes(plistlib.dumps(dict(CFBundleExecutable='AniOnMac',CFBundleIdentifier='io.anionmac.app',CFBundleName='AniOnMac',CFBundleDisplayName='AniOnMac',CFBundleIconFile='AppIcon',CFBundlePackageType='APPL',CFBundleShortVersionString='0.1.1',CFBundleVersion='4',LSMinimumSystemVersion='14.0',NSHighResolutionCapable=True)))
+p.write_bytes(plistlib.dumps(dict(CFBundleExecutable='AniOnMac',CFBundleIdentifier='io.anionmac.app',CFBundleName='AniOnMac',CFBundleDisplayName='AniOnMac',CFBundleIconFile='AppIcon',CFBundlePackageType='APPL',CFBundleShortVersionString='0.1.2',CFBundleVersion='5',LSMinimumSystemVersion='14.0',NSHighResolutionCapable=True)))
 PY
 codesign --force --sign - "$app"
 codesign --verify --deep --strict "$app"
