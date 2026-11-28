@@ -7,8 +7,8 @@ mkdir -p "$work" "$app/Contents/MacOS" "$app/Contents/Resources"
 for arch in arm64 x86_64; do
   xcrun clang -arch "$arch" -mmacosx-version-min=14.0 -fobjc-arc -Wall -Wextra -framework AppKit development/native/cursorctl.m -o "$work/cursorctl-$arch"
   xcrun clang -arch "$arch" -mmacosx-version-min=14.0 -fobjc-arc -c development/native/CursorRefresh.m -o "$work/refresh-$arch.o"
-  xcrun swiftc -swift-version 5 -target "$arch-apple-macosx14.0" -module-cache-path "$work/swift-cache" development/native/ANIConverter.swift -o "$work/anicore-$arch"
-  xcrun swiftc -parse-as-library -swift-version 5 -target "$arch-apple-macosx14.0" -module-cache-path "$work/swift-cache" development/app/Studio.swift development/app/Views.swift "$work/refresh-$arch.o" -o "$work/app-$arch"
+  xcrun swiftc -parse-as-library -swift-version 5 -target "$arch-apple-macosx14.0" -module-cache-path "$work/swift-cache" development/native/ANIConverter.swift development/native/CursorOutline.swift -o "$work/anicore-$arch"
+  xcrun swiftc -O -parse-as-library -swift-version 5 -target "$arch-apple-macosx14.0" -module-cache-path "$work/swift-cache" development/app/Studio.swift development/app/Views.swift development/native/CursorOutline.swift "$work/refresh-$arch.o" -o "$work/app-$arch"
 done
 lipo -create "$work/app-arm64" "$work/app-x86_64" -output "$app/Contents/MacOS/AniOnMac"
 for tool in anicore cursorctl; do

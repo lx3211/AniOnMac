@@ -87,24 +87,41 @@ struct CursorPreview: View {
     let size: Double
     var hotspot: [Double]?
     var mark = false
+    var markerColor = accent
+    var outline: (source: String, cache: PreviewOutlineCache)?
     var update: (([Double]) -> Void)?
+    @Environment(\.displayScale) private var displayScale
+
     var body: some View {
         let info = asset.info
         let maximum = info.aligned_canvas_px.max()!
         let w = size * info.aligned_canvas_px[0] / maximum
         let h = size * info.aligned_canvas_px[1] / maximum
+        let density = displayScale >= 2 ? 2 : 1
+        let pixelWidth = max(1, Int((w * Double(density)).rounded()))
+        let pixelHeight = max(1, Int((h * Double(density)).rounded()))
+        let padding = Double(CursorOutline.widthInPoints)
         let hot = hotspot ?? [info.hotspot_points[0] / (128 * info.aligned_canvas_px[0] / maximum), info.hotspot_points[1] / (128 * info.aligned_canvas_px[1] / maximum)]
         TimelineView(.animation(minimumInterval: max(0.016, info.frame_duration_seconds))) { time in
             let steps = info.playback_frames
-            let index = Int(time.date.timeIntervalSinceReferenceDate / max(0.016, info.frame_duration_seconds)) % steps.count
+            let step = Int(time.date.timeIntervalSinceReferenceDate / max(0.016, info.frame_duration_seconds)) % steps.count
+            let frame = steps[step]
             ZStack(alignment: .topLeading) {
-                Image(nsImage: asset.frames[steps[index]]).resizable().interpolation(.high).frame(width: w, height: h)
+                Color.clear.frame(width: w, height: h).background {
+                    if let outline, let image = outline.cache.image(asset.frames[frame], source: outline.source, frame: frame,
+                                                                    width: pixelWidth, height: pixelHeight, density: density) {
+                        Image(decorative: image, scale: CGFloat(density)).resizable().interpolation(.high)
+                            .frame(width: w + 2 * padding, height: h + 2 * padding)
+                    } else {
+                        Image(decorative: asset.frames[frame], scale: 1).resizable().interpolation(.high).frame(width: w, height: h)
+                    }
+                }
                 if mark {
                     Path { p in
                         let x = hot[0] * w, y = hot[1] * h
                         p.move(to: CGPoint(x: x - 5, y: y)); p.addLine(to: CGPoint(x: x + 5, y: y))
                         p.move(to: CGPoint(x: x, y: y - 5)); p.addLine(to: CGPoint(x: x, y: y + 5))
-                    }.stroke(accent, lineWidth: 1)
+                    }.stroke(markerColor, lineWidth: 1)
                 }
             }.frame(width: w, height: h).contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 0).onChanged { value in
@@ -119,6 +136,7 @@ struct ContentView: View {
     @State var path = ""
     @State var targeted = false
     @State var showHotspot = true
+    @State var darkPreview = false
     @State var confirmDelete = false
     var body: some View {
         HStack(spacing: 0) {
@@ -293,18 +311,33 @@ struct ContentView: View {
         })
     }
     func previewPanel(_ slot: Slot) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        let appearanceAction = studio.t(darkPreview ? "lightPreview" : "darkPreview")
+        let themeHasOutline = studio.profile?.whiteOutline == true
+        return VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text(studio.t("preview")).font(.headline); Spacer()
+                Text(studio.t("preview")).font(.headline)
+                Button { darkPreview.toggle() } label: { Image(systemName: "circle.lefthalf.filled") }
+                    .buttonStyle(SmallActionStyle(selected: darkPreview, borderless: true))
+                    .help(appearanceAction)
+                    .accessibilityLabel(appearanceAction)
+                Spacer()
                 Text(studio.t("actualSize")).font(.caption).foregroundStyle(accent).padding(7).background(cream, in: Capsule())
             }
             ZStack {
-                RoundedRectangle(cornerRadius: 16).fill(Color.white)
+                RoundedRectangle(cornerRadius: 16).fill(darkPreview ? Color.black : Color.white)
                 if let asset = studio.cache[slot.preview] {
-                    CursorPreview(asset: asset, size: slot.size, hotspot: studio.hotNormalized(slot), mark: showHotspot, update: { studio.setHotspot($0) })
-                } else { Text(studio.t("noCursor")).font(.callout).foregroundStyle(.secondary) }
+                    CursorPreview(asset: asset, size: slot.size, hotspot: studio.hotNormalized(slot), mark: showHotspot,
+                                  markerColor: darkPreview ? apricot : accent,
+                                  outline: themeHasOutline ? (source: slot.preview, cache: studio.outlineCache) : nil,
+                                  update: { studio.setHotspot($0) })
+                } else {
+                    Text(studio.t("noCursor")).font(.callout).foregroundStyle(darkPreview ? Color.white.opacity(0.7) : Color.secondary)
+                }
             }.frame(height: 310).overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.gray.opacity(0.12)))
-            Toggle(studio.t("showHotspot"), isOn: $showHotspot).toggleStyle(.checkbox).font(.caption)
+            HStack(spacing: 18) {
+                Toggle(studio.t("showHotspot"), isOn: $showHotspot)
+                Toggle(studio.t("whiteOutline"), isOn: Binding(get: { studio.profile?.whiteOutline == true }, set: { studio.setWhiteOutline($0) }))
+            }.toggleStyle(.checkbox).font(.caption)
             Text(studio.t("previewHint") + "\n" + studio.t("markerHint")).modifier(SecondaryCopy()).fixedSize(horizontal: false, vertical: true)
         }
     }

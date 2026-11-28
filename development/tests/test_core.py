@@ -69,6 +69,31 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(data['com.apple.coregraphics.Arrow']['HotSpotY'], 48)
         subprocess.run([CTL, 'validate', result['cape']], check=True, capture_output=True)
 
+    def test_white_outline_padding_at_both_densities(self):
+        config = self.path / 'config.json'
+        roles = [('arrow', 'com.apple.coregraphics.Arrow', 32), ('pointing', 'com.apple.cursor.13', 64),
+                 ('text', 'com.apple.coregraphics.IBeam', 24), ('wait', 'com.apple.coregraphics.Wait', 40)]
+        slots = [dict(role=role, path=str(self.source), size=size, hotspot=[.25, .75])
+                 for role, _, size in roles]
+        results = []
+        for enabled in (False, True):
+            options = dict(slots=slots, whiteOutline=True) if enabled else dict(slots=slots)
+            config.write_text(json.dumps(options))
+            result = self.run_core('export', config, self.path / str(enabled))
+            subprocess.run([CTL, 'validate', result['cape']], check=True, capture_output=True)
+            results.append(plistlib.loads(Path(result['cape']).read_bytes())['Cursors'])
+
+        for _, key, size in roles:
+            original, outlined = (result[key] for result in results)
+            points = size + 2
+            self.assertEqual([original['PointsWide'], original['PointsHigh']], [size, size])
+            self.assertEqual([outlined['PointsWide'], outlined['PointsHigh']], [points, points])
+            self.assertEqual([outlined['HotSpotX'], outlined['HotSpotY']], [size * .25 + 1, size * .75 + 1])
+            for field in ('FrameCount', 'FrameDuration'):
+                self.assertEqual(outlined[field], original[field])
+            for density, image in enumerate(outlined['Representations'], 1):
+                self.assertEqual(struct.unpack('>2I', image[16:24]), (points * density, points * density * outlined['FrameCount']))
+
     def test_25_step_boundary(self):
         for steps in (25, 26):
             data = b'ACON' + chunk(b'anih', struct.pack('<9I', 36, 2, steps, 4, 4, 32, 1, 18, 3))

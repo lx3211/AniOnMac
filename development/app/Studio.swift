@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ImageIO
 import UniformTypeIdentifiers
 
 @_silgen_name("MeowRefreshCursor") func MeowRefreshCursor() -> Int32
@@ -24,6 +25,7 @@ struct Profile: Codable, Identifiable {
     var id = UUID().uuidString
     var name: String
     var slots: [Slot] = roles.map { Slot(role: $0) }
+    var whiteOutline: Bool? = nil
 }
 struct Library: Codable {
     var profiles: [Profile] = []
@@ -52,7 +54,22 @@ struct PreviewInfo: Decodable {
 }
 struct PreviewAsset {
     var info: PreviewInfo
-    var frames: [NSImage]
+    var frames: [CGImage]
+}
+final class PreviewOutlineCache {
+    private let frames = NSCache<NSString, CGImage>()
+
+    init() {
+        frames.totalCostLimit = 48 * 1024 * 1024
+    }
+
+    func image(_ original: CGImage, source: String, frame: Int, width: Int, height: Int, density: Int) -> CGImage? {
+        let key = "\(source)/\(density)-\(width)x\(height)-\(frame)" as NSString
+        if let cached = frames.object(forKey: key) { return cached }
+        guard let outlined = CursorOutline(density: density).render(original, width: width, height: height) else { return nil }
+        frames.setObject(outlined, forKey: key, cost: outlined.bytesPerRow * outlined.height)
+        return outlined
+    }
 }
 struct AppFailure: LocalizedError {
     var message: String
@@ -87,10 +104,12 @@ func runProcess(_ executable: URL, _ arguments: [String]) async throws -> String
     var isApplied: Bool {
         guard let current = profile, let applied = activeApplication else { return false }
         return current.id == applied.id && current.slots == applied.slots
+            && (current.whiteOutline == true) == (applied.whiteOutline == true)
     }
     var canApply: Bool { !busy && !isApplied && (profile?.slots.contains { !$0.asset.isEmpty } ?? false) }
     @Published var ready = false
     @Published var cache: [String: PreviewAsset] = [:]
+    let outlineCache = PreviewOutlineCache()
     let root: URL
     let resources = Bundle.main.resourceURL!
     var profile: Profile? { library.profiles.first { $0.id == library.selected } }
@@ -175,9 +194,10 @@ func runProcess(_ executable: URL, _ arguments: [String]) async throws -> String
         let dir = root.appendingPathComponent(slot.preview)
         let info = try JSONDecoder().decode(PreviewInfo.self, from: Data(contentsOf: dir.appendingPathComponent("preview.json")))
         let count = (info.playback_frames.max() ?? 0) + 1
-        var frames: [NSImage] = []
+        var frames: [CGImage] = []
         for n in 0..<count {
-            guard let image = NSImage(contentsOf: dir.appendingPathComponent(String(format: "frame-%03d.png", n))) else {
+            let url = dir.appendingPathComponent(String(format: "frame-%03d.png", n))
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
                 throw AppFailure(message: t("missingPreview") + " " + slot.filename)
             }
             frames.append(image)
@@ -257,6 +277,11 @@ func runProcess(_ executable: URL, _ arguments: [String]) async throws -> String
         library.profiles[pi].slots[si].hotspot = point?.map { min(0.999999, max(0, $0)) }
         save()
     }
+    func setWhiteOutline(_ enabled: Bool) {
+        guard !busy, let index = library.profiles.firstIndex(where: { $0.id == library.selected }) else { return }
+        library.profiles[index].whiteOutline = enabled ? true : nil
+        save()
+    }
     func hotNormalized(_ slot: Slot) -> [Double] {
         if let h = slot.hotspot { return h }
         guard let info = cache[slot.preview]?.info else { return [0, 0] }
@@ -301,11 +326,12 @@ func runProcess(_ executable: URL, _ arguments: [String]) async throws -> String
             defer { busy = false; try? FileManager.default.removeItem(at: job) }
             do {
                 try FileManager.default.createDirectory(at: job, withIntermediateDirectories: true)
-                let config: [String: Any] = ["id": p.id, "name": p.name, "slots": p.slots.filter { !$0.asset.isEmpty }.map { slot -> [String: Any] in
+                let slots: [[String: Any]] = p.slots.filter { !$0.asset.isEmpty }.map { slot in
                     var d: [String: Any] = ["role": slot.role, "path": root.appendingPathComponent(slot.asset).path, "size": slot.size]
                     if let hotspot = slot.hotspot { d["hotspot"] = hotspot }
                     return d
-                }]
+                }
+                let config: [String: Any] = ["id": p.id, "name": p.name, "whiteOutline": p.whiteOutline == true, "slots": slots]
                 let input = job.appendingPathComponent("input.json")
                 try JSONSerialization.data(withJSONObject: config).write(to: input)
                 _ = try await runProcess(converter, ["export", input.path, job.appendingPathComponent("converted").path])

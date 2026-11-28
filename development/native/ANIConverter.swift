@@ -90,9 +90,7 @@ struct ANI {
 }
 func canvas(_ w: Int, _ h: Int) throws -> CGContext {
     try require(w > 0 && h > 0 && w * h <= 32 * 1024 * 1024, "Cursor bitmap is too large")
-    guard let context = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { throw ConversionError(text: "Cannot create bitmap") }
-    context.interpolationQuality = .high
+    guard let context = cursorBitmap(width: w, height: h) else { throw ConversionError(text: "Cannot create bitmap") }
     return context
 }
 func png(_ image: CGImage) throws -> Data {
@@ -105,7 +103,7 @@ func png(_ image: CGImage) throws -> Data {
 func gcd(_ a: Int, _ b: Int) -> Int { b == 0 ? a : gcd(b, a % b) }
 let cursorIDs = ["arrow": "com.apple.coregraphics.Arrow", "pointing": "com.apple.cursor.13", "text": "com.apple.coregraphics.IBeam", "wait": "com.apple.coregraphics.Wait"]
 
-func convert(_ source: URL, to output: URL, size: Double, hotspot: [Double]? = nil) throws -> ([String: Any], [String: Any]) {
+func convert(_ source: URL, to output: URL, size: Double, hotspot: [Double]? = nil, whiteOutline: Bool = false) throws -> ([String: Any], [String: Any]) {
     try require(size.isFinite && size >= 8 && size <= 128, "Size must be 8–128 points")
     let ani = try ANI(url: source)
     let left = ani.frames.map(\.x).max()!, top = ani.frames.map(\.y).max()!
@@ -143,41 +141,62 @@ func convert(_ source: URL, to output: URL, size: Double, hotspot: [Double]? = n
     var reps: [Data] = []
     for density in [1, 2] {
         let w = max(1, Int((points[0] * Double(density)).rounded())), h = max(1, Int((points[1] * Double(density)).rounded()))
-        let context = try canvas(w, h * outputSteps)
+        let renderer = whiteOutline ? CursorOutline(density: density) : nil
+        let padding = renderer?.padding ?? 0
+        let frameWidth = w + 2 * padding, frameHeight = h + 2 * padding
+        let context = try canvas(frameWidth, frameHeight * outputSteps)
+        var outlined: [Int: CGImage] = [:]
+        if let renderer {
+            for index in Set(playback) {
+                guard let image = renderer.render(aligned[index], width: w, height: h) else {
+                    throw ConversionError(text: "Cannot render cursor outline")
+                }
+                outlined[index] = image
+            }
+        }
         for (step, index) in playback.enumerated() {
-            context.draw(aligned[index], in: CGRect(x: 0, y: (outputSteps - 1 - step) * h, width: w, height: h))
+            let rect = CGRect(x: 0, y: (outputSteps - 1 - step) * frameHeight, width: frameWidth, height: frameHeight)
+            context.draw(outlined[index] ?? aligned[index], in: rect)
         }
         reps.append(try png(context.makeImage()!))
     }
     let metadata: [String: Any] = ["aligned_canvas_px": [width, height], "hotspot_points": hot, "playback_frames": playback, "frame_duration_seconds": frameDuration, "source_steps": total]
-    let cursor: [String: Any] = ["PointsWide": points[0], "PointsHigh": points[1], "HotSpotX": hot[0], "HotSpotY": hot[1], "FrameCount": outputSteps, "FrameDuration": frameDuration, "Representations": reps]
+    let inset = whiteOutline ? Double(CursorOutline.widthInPoints) : 0
+    let cursor: [String: Any] = ["PointsWide": points[0] + 2 * inset, "PointsHigh": points[1] + 2 * inset, "HotSpotX": hot[0] + inset, "HotSpotY": hot[1] + inset, "FrameCount": outputSteps, "FrameDuration": frameDuration, "Representations": reps]
     return (metadata, cursor)
 }
 
-do {
-    let args = CommandLine.arguments
-    try require(args.count == 4, "Usage: anicore preview ANI OUTPUT | export CONFIG OUTPUT")
-    let input = URL(fileURLWithPath: args[2]), output = URL(fileURLWithPath: args[3])
-    var response: [String: Any]
-    if args[1] == "preview" {
-        response = try convert(input, to: output, size: 128).0
-    } else {
-        try require(args[1] == "export", "Unknown converter command")
-        guard let config = try JSONSerialization.jsonObject(with: Data(contentsOf: input)) as? [String: Any], let slots = config["slots"] as? [[String: Any]] else { throw ConversionError(text: "Invalid theme configuration") }
-        try require(!slots.isEmpty && slots.count <= 4, "Select at least one cursor")
-        var cursors: [String: Any] = [:]
-        for slot in slots {
-            guard let role = slot["role"] as? String, let identifier = cursorIDs[role], let path = slot["path"] as? String, let size = slot["size"] as? Double else { throw ConversionError(text: "Invalid cursor configuration") }
-            try require(cursors[identifier] == nil, "Duplicate cursor mode")
-            cursors[identifier] = try convert(URL(fileURLWithPath: path), to: output.appendingPathComponent(role), size: size, hotspot: slot["hotspot"] as? [Double]).1
+@main
+struct ANIConverter {
+    static func main() {
+        do {
+            let args = CommandLine.arguments
+            try require(args.count == 4, "Usage: anicore preview ANI OUTPUT | export CONFIG OUTPUT")
+            let input = URL(fileURLWithPath: args[2]), output = URL(fileURLWithPath: args[3])
+            var response: [String: Any]
+            if args[1] == "preview" {
+                response = try convert(input, to: output, size: 128).0
+            } else {
+                try require(args[1] == "export", "Unknown converter command")
+                guard let config = try JSONSerialization.jsonObject(with: Data(contentsOf: input)) as? [String: Any], let slots = config["slots"] as? [[String: Any]] else { throw ConversionError(text: "Invalid theme configuration") }
+                try require(!slots.isEmpty && slots.count <= 4, "Select at least one cursor")
+                let whiteOutline = config["whiteOutline"] as? Bool ?? false
+                var cursors: [String: Any] = [:]
+                for slot in slots {
+                    guard let role = slot["role"] as? String, let identifier = cursorIDs[role], let path = slot["path"] as? String, let size = slot["size"] as? Double else { throw ConversionError(text: "Invalid cursor configuration") }
+                    try require(cursors[identifier] == nil, "Duplicate cursor mode")
+                    cursors[identifier] = try convert(URL(fileURLWithPath: path), to: output.appendingPathComponent(role), size: size,
+                                                      hotspot: slot["hotspot"] as? [Double], whiteOutline: whiteOutline).1
+                }
+                let cape: [String: Any] = ["Cursors": cursors, "CapeName": config["name"] as? String ?? "Theme", "Version": 2.0, "MinimumVersion": 2.0]
+                let path = output.appendingPathComponent("theme.cape")
+                try PropertyListSerialization.data(fromPropertyList: cape, format: .xml, options: 0).write(to: path)
+                response = ["cape": path.path]
+            }
+            print(String(decoding: try JSONSerialization.data(withJSONObject: response, options: .sortedKeys), as: UTF8.self))
+        } catch {
+            FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
+            exit(1)
         }
-        let cape: [String: Any] = ["Cursors": cursors, "CapeName": config["name"] as? String ?? "Theme", "Version": 2.0, "MinimumVersion": 2.0]
-        let path = output.appendingPathComponent("theme.cape")
-        try PropertyListSerialization.data(fromPropertyList: cape, format: .xml, options: 0).write(to: path)
-        response = ["cape": path.path]
     }
-    print(String(decoding: try JSONSerialization.data(withJSONObject: response, options: .sortedKeys), as: UTF8.self))
-} catch {
-    FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
-    exit(1)
 }

@@ -7,5 +7,5 @@ development/.build/test-cursorctl
 codesign --verify --deep --strict AniOnMac.app
 
 xcrun clang -fobjc-arc -c development/native/CursorRefresh.m -o development/.build/test-refresh.o
-xcrun swiftc -parse-as-library -swift-version 5 -module-cache-path development/.build/swift-cache development/app/Studio.swift development/tests/test_apply_state.swift development/.build/test-refresh.o -o development/.build/test-apply-state
+xcrun swiftc -parse-as-library -swift-version 5 -module-cache-path development/.build/swift-cache development/app/Studio.swift development/native/CursorOutline.swift development/tests/test_apply_state.swift development/.build/test-refresh.o -o development/.build/test-apply-state
 development/.build/test-apply-state --data-dir development/.build/apply-state-tests
