@@ -132,12 +132,14 @@ struct CursorPreview: View {
 }
 
 struct ContentView: View {
+    private static let latestReleaseURL = URL(string: "https://github.com/lx3211/AniOnMac/releases/latest")!
+
     @StateObject var studio = Studio()
-    @State var path = ""
     @State var targeted = false
     @State var showHotspot = true
     @State var darkPreview = false
     @State var confirmDelete = false
+    @State private var editorHeight: CGFloat?
     var body: some View {
         HStack(spacing: 0) {
             sidebar
@@ -146,10 +148,14 @@ struct ContentView: View {
                 header
                 rolePicker
                 ScrollView {
-                    if let slot = studio.slot { editor(slot) }
-                }
+                    if let slot = studio.slot {
+                        editor(slot)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { editorHeight = $0 }
+                    }
+                }.frame(maxHeight: editorHeight)
                 footer
-            }.padding(26).frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(red: 0.98, green: 0.98, blue: 0.97))
+            }.padding(26).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(Color(red: 0.98, green: 0.98, blue: 0.97))
         }.foregroundStyle(ink).tint(accent).preferredColorScheme(.light)
             .frame(minWidth: 1060, minHeight: 780)
             .disabled(studio.busy || !studio.ready)
@@ -161,14 +167,23 @@ struct ContentView: View {
                 Button(studio.t("cancel"), role: .cancel) {}
                 Button(studio.t("delete"), role: .destructive) { studio.remove() }
             } message: { Text(studio.t("deleteMessage")) }
-            .onChange(of: studio.role) { path = "" }
-            .onChange(of: studio.library.selected) { path = "" }
     }
     var sidebar: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 10) {
-                Image(systemName: "cursorarrow.rays").font(.title).foregroundStyle(accent)
-                Text("AniOnMac").font(.title3.bold())
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Link(destination: Self.latestReleaseURL) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "cursorarrow.rays").font(.title).foregroundStyle(accent)
+                        Text("AniOnMac").font(.title3.bold())
+                    }.contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                    .help(studio.t("latestRelease")).accessibilityLabel(studio.t("latestRelease"))
+                if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+                    Text(verbatim: "v\(version)")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color(red: 0.51, green: 0.29, blue: 0.12))
+                        .fixedSize()
+                }
             }.padding(.top, 14)
             Text(studio.t("myThemes")).font(.caption.weight(.medium)).foregroundStyle(.secondary)
             ScrollView {
@@ -176,22 +191,26 @@ struct ContentView: View {
                     ForEach(studio.library.profiles) { p in themeRow(p) }
                 }
             }
-            Button { studio.add(copy: false) } label: { Label(studio.t("addTheme"), systemImage: "plus").frame(maxWidth: .infinity) }.buttonStyle(SmallActionStyle()).controlSize(.large)
-            HStack {
-                Button(studio.t("duplicate")) { studio.add(copy: true) }.buttonStyle(SmallActionStyle())
-                Spacer()
-                Button { confirmDelete = true } label: { Image(systemName: "trash") }.buttonStyle(SmallActionStyle())
-                    .disabled(studio.library.profiles.count < 2).help(studio.t("delete"))
-            }
+            HStack(spacing: 8) {
+                Button { studio.add(copy: false) } label: {
+                    Label(studio.t("add"), systemImage: "plus").frame(maxWidth: .infinity).frame(height: 18)
+                }.buttonStyle(SmallActionStyle()).accessibilityLabel(studio.t("addTheme"))
+                Button { studio.add(copy: true) } label: {
+                    Image(systemName: "plus.square.on.square").frame(width: 18, height: 18)
+                }.buttonStyle(SmallActionStyle(borderless: true))
+                    .help(studio.t("duplicate")).accessibilityLabel(studio.t("duplicate"))
+                Button { confirmDelete = true } label: {
+                    Image(systemName: "trash").frame(width: 18, height: 18)
+                }.buttonStyle(SmallActionStyle(borderless: true))
+                    .disabled(studio.library.profiles.count < 2)
+                    .help(studio.t("deleteTheme")).accessibilityLabel(studio.t("deleteTheme"))
+            }.font(.system(size: 13, weight: .medium))
             Divider()
             Button { studio.restoreNative() } label: {
-                Label(studio.t("nativeReset"), systemImage: "arrow.counterclockwise.circle")
+                Label(studio.t("nativeReset"), systemImage: "apple.logo")
                     .font(.system(size: 12, weight: .medium)).frame(maxWidth: .infinity, alignment: .leading)
                     .padding(12).contentShape(Rectangle())
             }.buttonStyle(SmallActionStyle(row: true))
-            Divider()
-            Label(studio.t("autoSave"), systemImage: "checkmark.circle").modifier(SecondaryCopy())
-            Text(studio.t("copyHint")).modifier(SecondaryCopy()).fixedSize(horizontal: false, vertical: true)
         }.padding(20).frame(width: 210).frame(maxHeight: .infinity).background(cream)
     }
     func themeRow(_ p: Profile) -> some View {
@@ -202,7 +221,7 @@ struct ContentView: View {
                 } else { Image(systemName: "cursorarrow").frame(width: 34, height: 34) }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(p.name.isEmpty ? studio.t("untitled") : p.name).font(.system(size: 13, weight: .semibold)).lineLimit(2)
-                    Text("\(p.slots.filter { !$0.asset.isEmpty }.count) / 4 · " + studio.t("modes")).modifier(SecondaryCopy())
+                    Text("\(p.slots.filter { !$0.asset.isEmpty }.count) / 4").modifier(SecondaryCopy())
                 }
                 Spacer(minLength: 0)
             }.padding(10).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
@@ -246,10 +265,6 @@ struct ContentView: View {
                     if !slot.asset.isEmpty { Button(studio.t("clearMode")) { studio.clearSlot() }.buttonStyle(SmallActionStyle()).font(.caption) }
                 }
                 dropZone(slot)
-                HStack {
-                    TextField(studio.t("pathPlaceholder"), text: $path).textFieldStyle(.roundedBorder).onSubmit { importPath() }
-                    Button(studio.t("import")) { importPath() }.buttonStyle(SmallActionStyle()).disabled(path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
                 Divider()
                 HStack {
                     Text(studio.t("sizeHeading")).font(.caption.weight(.semibold)).foregroundStyle(accent)
@@ -262,7 +277,6 @@ struct ContentView: View {
                 }.buttonStyle(SmallActionStyle()).font(.caption)
                 Divider()
                 hotspotEditor(slot)
-                if slot.role == "pointing" { Text(studio.t("pointingHint")).modifier(SecondaryCopy()) }
             }.frame(maxWidth: .infinity)
             previewPanel(slot).frame(maxWidth: .infinity)
         }.padding(22).background(Color.white.opacity(0.7), in: RoundedRectangle(cornerRadius: 18))
@@ -338,32 +352,21 @@ struct ContentView: View {
                 Toggle(studio.t("showHotspot"), isOn: $showHotspot)
                 Toggle(studio.t("whiteOutline"), isOn: Binding(get: { studio.profile?.whiteOutline == true }, set: { studio.setWhiteOutline($0) }))
             }.toggleStyle(.checkbox).font(.caption)
-            Text(studio.t("previewHint") + "\n" + studio.t("markerHint")).modifier(SecondaryCopy()).fixedSize(horizontal: false, vertical: true)
         }
     }
-    func importPath() {
-        var input = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        if input.hasPrefix("\"") && input.hasSuffix("\"") { input = String(input.dropFirst().dropLast()) }
-        let url = input.hasPrefix("file://") ? URL(string: input) : URL(fileURLWithPath: (input as NSString).expandingTildeInPath)
-        if let url { studio.importFile(url) }
-    }
     var footer: some View {
-        VStack(alignment: .trailing, spacing: 8) {
-            HStack(spacing: 14) {
-                Text(studio.t(studio.status)).modifier(SecondaryCopy()).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
-                Button(studio.t("undo")) { studio.restore() }.buttonStyle(SmallActionStyle()).disabled(!studio.canUndo).controlSize(.large)
-                Button { studio.apply() } label: { Label(studio.t(studio.isApplied ? "alreadyApplied" : "apply"), systemImage: "checkmark").padding(.horizontal, 8) }
-                    .buttonStyle(SmallActionStyle(primary: true)).controlSize(.large).disabled(!studio.canApply)
+        HStack(spacing: 14) {
+            if let status = studio.status {
+                Text(studio.t(status)).modifier(SecondaryCopy())
+                    .frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Spacer(minLength: 0)
             }
-            if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
-                Text(verbatim: "v\(version)")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color(red: 0.51, green: 0.29, blue: 0.12))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(apricot.opacity(0.55), in: Capsule())
-                    .offset(y: 6)
-            }
+            Button { studio.restore() } label: {
+                Label(studio.t("undo"), systemImage: "arrow.counterclockwise.circle")
+            }.buttonStyle(SmallActionStyle()).disabled(!studio.canUndo).controlSize(.large)
+            Button { studio.apply() } label: { Label(studio.t(studio.isApplied ? "alreadyApplied" : "apply"), systemImage: "checkmark").padding(.horizontal, 8) }
+                .buttonStyle(SmallActionStyle(primary: true)).controlSize(.large).disabled(!studio.canApply)
         }
     }
 }

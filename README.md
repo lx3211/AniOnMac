@@ -10,7 +10,7 @@ Convert Windows `.ani` animated cursors for macOS, preserving frame order, timin
 
 1. Download `AniOnMac-macOS-universal.zip` from GitHub Releases, extract it and open `AniOnMac.app`.
 2. Create a theme and select a mode.
-3. Choose an `.ani` file, paste its full path, or drag it in.
+3. Choose an `.ani` file or drag it in.
 4. Adjust size and hotspot, then select **Apply theme**.
 
 - Note: [macOS security](https://support.apple.com/en-us/102445) may block the app when first opened.

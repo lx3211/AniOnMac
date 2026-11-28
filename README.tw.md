@@ -9,7 +9,7 @@
 
 1. 從 GitHub Releases 下載 `AniOnMac-macOS-universal.zip`，解壓後開啟 `AniOnMac.app`
 2. 建立主題，選擇模式
-3. 選檔、貼上完整路徑，或拖入 `.ani`
+3. 選擇或拖入 `.ani` 檔案
 4. 調整尺寸與定位點，按下「套用主題」
 
 - 註：首次開啟時可能被 [macOS 安全機制](https://support.apple.com/zh-tw/102445)攔截

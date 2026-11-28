@@ -97,7 +97,7 @@ func runProcess(_ executable: URL, _ arguments: [String]) async throws -> String
     @Published var library = Library()
     @Published var role = "arrow"
     @Published var busy = false
-    @Published var status = "ready"
+    @Published var status: String?
     @Published var error: String?
     // Only a successful apply in this running session establishes this snapshot.
     @Published var activeApplication: Profile?
@@ -187,7 +187,7 @@ func runProcess(_ executable: URL, _ arguments: [String]) async throws -> String
                 try persist()
             }
             ready = true
-            status = "ready"
+            status = nil
         } catch { self.error = error.localizedDescription; status = "loadFailed" }
     }
     func loadPreview(_ slot: Slot) throws {
