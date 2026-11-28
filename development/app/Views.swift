@@ -157,7 +157,7 @@ struct ContentView: View {
             }.padding(26).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(Color(red: 0.98, green: 0.98, blue: 0.97))
         }.foregroundStyle(ink).tint(accent).preferredColorScheme(.light)
-            .frame(minWidth: 1060, minHeight: 780)
+            .frame(minWidth: 1060, minHeight: 710)
             .disabled(studio.busy || !studio.ready)
             .overlay { if studio.busy { VStack(spacing: 12) { ProgressView(); Text(studio.t("processing")) }.padding(28).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18)) } }
             .alert(studio.t("errorTitle"), isPresented: Binding(get: { studio.error != nil }, set: { if !$0 { studio.error = nil } })) {
@@ -371,9 +371,62 @@ struct ContentView: View {
     }
 }
 
+private let mainWindowID = "main"
+private let initialWindowSize = CGSize(width: 1160, height: 740)
+
+private struct InitialWindowPlacement: NSViewRepresentable {
+    func makeNSView(context: Context) -> PlacementView { PlacementView() }
+    func updateNSView(_ view: PlacementView, context: Context) {}
+
+    final class PlacementView: NSView {
+        private weak var positionedWindow: NSWindow?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: nil)
+            guard let window, positionedWindow !== window else { return }
+            positionedWindow = window
+            window.isRestorable = false
+            if !window.isKeyWindow {
+                NotificationCenter.default.addObserver(self, selector: #selector(windowBecameKey(_:)),
+                                                       name: NSWindow.didBecomeKeyNotification, object: window)
+            }
+            place(window)
+        }
+
+        @objc private func windowBecameKey(_ notification: Notification) {
+            guard let window = notification.object as? NSWindow else { return }
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: window)
+            place(window)
+        }
+
+        private func place(_ window: NSWindow) {
+            DispatchQueue.main.async { [weak window] in
+                guard let window else { return }
+                // Frame autosaving is independent of window state restoration.
+                window.setFrameAutosaveName("")
+                guard let bounds = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
+                let width = min(initialWindowSize.width, bounds.width)
+                let height = min(initialWindowSize.height, bounds.height)
+                let frame = CGRect(x: bounds.midX - width / 2, y: bounds.midY - height / 2, width: width, height: height)
+                window.setFrame(frame, display: true)
+            }
+        }
+    }
+}
+
 @main struct CursorApp: App {
+    init() {
+        // Clear the frame saved by earlier builds before SwiftUI creates the scene.
+        NSWindow.removeFrame(usingName: mainWindowID)
+    }
+
     var body: some Scene {
-        Window("AniOnMac", id: "main") { ContentView() }.defaultSize(width: 1160, height: 900)
-            .commands { CommandGroup(replacing: .newItem) {} }
+        Window("AniOnMac", id: mainWindowID) {
+            ContentView().background(InitialWindowPlacement())
+        }
+        .defaultSize(initialWindowSize)
+        .defaultPosition(.center)
+        .commands { CommandGroup(replacing: .newItem) {} }
     }
 }
