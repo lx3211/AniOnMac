@@ -54,6 +54,7 @@ Convert Windows `.ani` animated cursors for macOS, preserving frame order, timin
 
 1. Multiple custom themes, automatic saving and one-step undo
 1. Live animation preview at 1:1 macOS points
+1. Add an optional white outline to all imported cursors in a theme so they stand out on dark backgrounds. Use the dark preview to check the effect.
 1. Independent settings for all four cursor modes
     - Per-mode size adjustment and reset
     - One-click size for the entire theme
